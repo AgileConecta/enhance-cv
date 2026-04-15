@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# enhance-cv
 
-## Getting Started
+`enhance-cv` is a candidate-first resume workspace built with Next.js, TypeScript, Prisma, and Supabase.
 
-First, run the development server:
+The product direction is:
+- create a resume from scratch
+- import resumes from files, pasted text, and profile links
+- maintain a library of base resumes, templates, and job-tailored variants
+- analyze ATS readiness and job fit
+- generate future ATS and visual outputs
+
+## Current backend status
+
+The project already includes:
+- modular resume import pipeline
+- Prisma domain for resumes, versions, sources, analyses, suggestions, and outputs
+- authenticated write APIs
+- Prisma migrations committed to the repository
+- Supabase RLS SQL applied as defense in depth
+- LLM enrichment behind explicit consent with PII redaction
+
+## Main routes
+
+- `POST /api/resumes`
+  - create a manual resume from structured JSON Resume data
+- `POST /api/resumes/import`
+  - import a resume from file, pasted text, or source URL
+- `POST /api/parse-cv`
+  - compatibility route for the current upload flow
+- `POST /api/job-targets/analyze`
+  - compute ATS and fit analysis for a resume and job target
+
+## Local development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Build for production:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database workflow
 
-## Learn More
+Generate Prisma client:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run db:generate
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Check migration status:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run db:status
+```
 
-## Deploy on Vercel
+Apply migrations in a deployment environment:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run db:deploy
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Environment
+
+Do not commit `.env`, `.env.local`, or any secret-bearing file.
+
+Recommended next operational steps:
+- rotate any exposed secrets before publishing the repository
+- validate migrations on a clean database
+- validate RLS with real authenticated test users
+- add structured logging and standardized API error envelopes
+
+## Git remote
+
+This repository is initialized locally and ready to be connected to GitHub.
+
+Typical next commands:
+
+```bash
+git remote add origin <your-github-url>
+git push -u origin main
+```
