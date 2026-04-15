@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ResumeKind {
+  BASE
+  TEMPLATE
+  JOB_TAILORED
+}
+
+enum ResumeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum ResumeSourceKind {
+  MANUAL
+  FILE_IMPORT
+  PROFILE_LINK
+  PORTAL_EXPORT
+  PASTED_TEXT
+}
+
+enum ResumeSourceFormat {
+  PDF
+  DOC
+  DOCX
+  LINKEDIN_URL
+  WORKDAY_EXPORT
+  CATHO_EXPORT
+  PLAIN_TEXT
+  JSON_RESUME
+  UNKNOWN
+}
+
+enum OutputKind {
+  ATS
+  VISUAL
+}
+
+enum SuggestionStatus {
+  GENERATED
+  APPLIED
+  DISMISSED
+}
+
+model User {
+  id               String           @id @default(cuid())
+  email            String           @unique
+  name             String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  resumes          Resume[]
+  jobTargets       JobTarget[]
+  curationProfiles CurationProfile[]
+}
+
+model Resume {
+  id             String          @id @default(cuid())
+  userId         String
+  title          String
+  kind           ResumeKind      @default(BASE)
+  status         ResumeStatus    @default(DRAFT)
+  summary        String?
+  sourceResumeId String?
+  jobTargetId    String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceResume   Resume?         @relation("ResumeDerivation", fields: [sourceResumeId], references: [id], onDelete: SetNull)
+  derivedResumes Resume[]        @relation("ResumeDerivation")
+  jobTarget      JobTarget?      @relation(fields: [jobTargetId], references: [id], onDelete: SetNull)
+  versions       ResumeVersion[]
+  sources        ResumeSource[]
+  analyses       ResumeAnalysis[]
+  suggestionSets SuggestionSet[]
+  outputRenders  OutputRender[]
+
+  @@index([userId, kind, status])
+  @@index([jobTargetId])
+}
+
+model ResumeVersion {
+  id             String          @id @default(cuid())
+  resumeId       String
+  versionNumber  Int
+  normalizedData Json
+  editorState    Json?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  resume         Resume          @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  analyses       ResumeAnalysis[]
+  suggestionSets SuggestionSet[]
+  outputRenders  OutputRender[]
+
+  @@unique([resumeId, versionNumber])
+  @@index([resumeId, createdAt])
+}
+
+model ResumeSource {
+  id               String             @id @default(cuid())
+  resumeId         String
+  kind             ResumeSourceKind
+  format           ResumeSourceFormat @default(UNKNOWN)
+  label            String?
+  sourceUrl        String?
+  originalFilename String?
+  mimeType         String?
+  rawText          String?
+  extractedText    String?
+  metadata         Json?
+  createdAt        DateTime           @default(now())
+  resume           Resume             @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  @@index([resumeId, kind, format])
+}
+
+model JobTarget {
+  id             String           @id @default(cuid())
+  userId         String
+  title          String
+  company        String?
+  description    String
+  sourceUrl      String?
+  parsedKeywords Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumes        Resume[]
+  analyses       ResumeAnalysis[]
+  suggestionSets SuggestionSet[]
+
+  @@index([userId, createdAt])
+}
+
+model ResumeAnalysis {
+  id              String         @id @default(cuid())
+  resumeId        String
+  resumeVersionId String?
+  jobTargetId     String?
+  atsScore        Float?
+  fitScore        Float?
+  strengths       Json?
+  gaps            Json?
+  recommendations Json?
+  modelName       String?
+  createdAt       DateTime       @default(now())
+  resume          Resume         @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  resumeVersion   ResumeVersion? @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+  jobTarget       JobTarget?     @relation(fields: [jobTargetId], references: [id], onDelete: SetNull)
+
+  @@index([resumeId, jobTargetId, createdAt])
+}
+
+model SuggestionSet {
+  id                String           @id @default(cuid())
+  resumeId          String
+  resumeVersionId   String?
+  jobTargetId       String?
+  curationProfileId String?
+  status            SuggestionStatus @default(GENERATED)
+  items             Json
+  createdAt         DateTime         @default(now())
+  resume            Resume           @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  resumeVersion     ResumeVersion?   @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+  jobTarget         JobTarget?       @relation(fields: [jobTargetId], references: [id], onDelete: SetNull)
+  curationProfile   CurationProfile? @relation(fields: [curationProfileId], references: [id], onDelete: SetNull)
+
+  @@index([resumeId, jobTargetId, createdAt])
+}
+
+model CurationProfile {
+  id             String          @id @default(cuid())
+  userId         String?
+  name           String
+  targetRole     String
+  seniority      String?
+  locale         String          @default("pt-BR")
+  isSystem       Boolean         @default(false)
+  rules          Json
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  suggestionSets SuggestionSet[]
+
+  @@index([userId, targetRole])
+}
+
+model OutputRender {
+  id              String         @id @default(cuid())
+  resumeId        String
+  resumeVersionId String?
+  kind            OutputKind
+  content         Json?
+  html            String?
+  createdAt       DateTime       @default(now())
+  resume          Resume         @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  resumeVersion   ResumeVersion? @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+
+  @@index([resumeId, kind, createdAt])
+}
