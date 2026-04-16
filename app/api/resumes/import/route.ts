@@ -1,9 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { apiError, apiSuccess } from "@/lib/api/responses";
 import { AuthenticationError, requireAuthenticatedUser } from "@/lib/auth/current-user";
+import { logError, logInfo } from "@/lib/observability/logger";
+import { getRequestId } from "@/lib/observability/request-id";
 import { importResume } from "@/lib/resume/pipeline/import-resume";
 import { createImportedResume } from "@/lib/resume/storage";
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
+
   try {
     const user = await requireAuthenticatedUser();
     const formData = await request.formData();
@@ -25,21 +30,33 @@ export async function POST(request: NextRequest) {
 
     const saved = await createImportedResume({ user, result });
 
-    return NextResponse.json({
-      success: true,
+    logInfo("resume imported", {
+      requestId,
+      route: "/api/resumes/import",
+      userId: user.id,
+      sourceType: result.meta.source.format,
+      status: 200,
+    });
+
+    return apiSuccess(requestId, {
       resume: result.resume,
       savedId: saved.id,
       meta: result.meta,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 401 });
+      return apiError(requestId, 401, "UNAUTHORIZED", error.message);
     }
 
-    console.error("[resumes/import]", error);
+    logError("resume import failed", {
+      requestId,
+      route: "/api/resumes/import",
+      status: 422,
+      error,
+    });
     const message =
       error instanceof Error ? error.message : "Erro interno ao importar curriculo.";
 
-    return NextResponse.json({ success: false, error: message }, { status: 422 });
+    return apiError(requestId, 422, "IMPORT_ERROR", message);
   }
 }

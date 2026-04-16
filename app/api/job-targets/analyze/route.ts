@@ -1,8 +1,13 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { apiError, apiSuccess } from "@/lib/api/responses";
 import { analyzeJobTarget } from "@/lib/job-targets/analyze-job-target";
+import { logError, logInfo } from "@/lib/observability/logger";
+import { getRequestId } from "@/lib/observability/request-id";
 import { JsonResumeSchema } from "@/lib/schemas/json-resume.schema";
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
+
   try {
     const body = await request.json();
     const validation = JsonResumeSchema.safeParse(body.resume);
@@ -13,13 +18,15 @@ export async function POST(request: NextRequest) {
         : "";
 
     if (!validation.success) {
-      return NextResponse.json({ error: "resume inválido." }, { status: 400 });
+      return apiError(requestId, 400, "VALIDATION_ERROR", "resume invalido.");
     }
 
     if (!title || !description) {
-      return NextResponse.json(
-        { error: "jobTarget.title e jobTarget.description são obrigatórios." },
-        { status: 400 }
+      return apiError(
+        requestId,
+        400,
+        "VALIDATION_ERROR",
+        "jobTarget.title e jobTarget.description sao obrigatorios."
       );
     }
 
@@ -37,12 +44,20 @@ export async function POST(request: NextRequest) {
         body.curation && typeof body.curation === "object" ? body.curation : undefined,
     });
 
-    return NextResponse.json({ success: true, analysis });
+    logInfo("job target analyzed", {
+      requestId,
+      route: "/api/job-targets/analyze",
+      status: 200,
+    });
+
+    return apiSuccess(requestId, { analysis });
   } catch (error) {
-    console.error("[job-targets/analyze]", error);
-    return NextResponse.json(
-      { error: "Erro interno ao analisar a vaga." },
-      { status: 500 }
-    );
+    logError("job target analysis failed", {
+      requestId,
+      route: "/api/job-targets/analyze",
+      status: 500,
+      error,
+    });
+    return apiError(requestId, 500, "INTERNAL_ERROR", "Erro interno ao analisar a vaga.");
   }
 }

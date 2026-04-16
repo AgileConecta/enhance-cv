@@ -1,10 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import type { Prisma } from "@/app/generated/prisma";
+import { apiError, apiSuccess } from "@/lib/api/responses";
 import { AuthenticationError, requireAuthenticatedUser } from "@/lib/auth/current-user";
+import { logError, logInfo } from "@/lib/observability/logger";
+import { getRequestId } from "@/lib/observability/request-id";
 import { createManualResume } from "@/lib/resume/storage";
 import { JsonResumeSchema } from "@/lib/schemas/json-resume.schema";
 
 export async function POST(request: NextRequest) {
+  const requestId = getRequestId(request);
+
   try {
     const user = await requireAuthenticatedUser();
     const body = await request.json();
@@ -13,20 +18,16 @@ export async function POST(request: NextRequest) {
     const validation = JsonResumeSchema.safeParse(body.resume);
 
     if (!title) {
-      return NextResponse.json({ error: "title e obrigatorio." }, { status: 400 });
+      return apiError(requestId, 400, "VALIDATION_ERROR", "title e obrigatorio.");
     }
 
     if (!validation.success) {
-      return NextResponse.json(
-        {
-          error: "resume invalido.",
-          issues: validation.error.issues.map((issue) => ({
-            path: issue.path.join("."),
-            message: issue.message,
-          })),
-        },
-        { status: 400 }
-      );
+      return apiError(requestId, 400, "VALIDATION_ERROR", "resume invalido.", {
+        issues: validation.error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        })),
+      });
     }
 
     const saved = await createManualResume({
@@ -36,17 +37,28 @@ export async function POST(request: NextRequest) {
       normalizedData: validation.data as Prisma.InputJsonValue,
     });
 
-    return NextResponse.json({
-      success: true,
+    logInfo("manual resume created", {
+      requestId,
+      route: "/api/resumes",
+      userId: user.id,
+      status: 200,
+    });
+
+    return apiSuccess(requestId, {
       resumeId: saved.id,
       versionId: saved.versions[0]?.id ?? null,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
+      return apiError(requestId, 401, "UNAUTHORIZED", error.message);
     }
 
-    console.error("[resumes]", error);
-    return NextResponse.json({ error: "Erro interno ao criar curriculo." }, { status: 500 });
+    logError("manual resume creation failed", {
+      requestId,
+      route: "/api/resumes",
+      status: 500,
+      error,
+    });
+    return apiError(requestId, 500, "INTERNAL_ERROR", "Erro interno ao criar curriculo.");
   }
 }
