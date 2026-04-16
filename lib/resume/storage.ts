@@ -1,12 +1,16 @@
 import {
   OutputKind,
   ResumeKind,
+  SuggestionStatus,
   ResumeSourceFormat,
   ResumeSourceKind,
   type Prisma,
 } from "@/app/generated/prisma";
 import type { AuthenticatedUser } from "@/lib/auth/current-user";
 import type {
+  CurationGuidance,
+  JobTargetInput,
+  ResumeAnalysisResult,
   ResumeImportResult,
   ResumeImportSourceFormat,
   ResumeImportSourceKind,
@@ -164,13 +168,323 @@ export async function createManualResume(params: {
   });
 }
 
+export async function listResumesForUser(userId: string) {
+  return prisma.resume.findMany({
+    where: { userId },
+    orderBy: { updatedAt: "desc" },
+    include: {
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        take: 1,
+      },
+      _count: {
+        select: {
+          versions: true,
+          analyses: true,
+          suggestionSets: true,
+        },
+      },
+    },
+  });
+}
+
+export async function getResumeByIdForUser(userId: string, resumeId: string) {
+  return prisma.resume.findFirst({
+    where: {
+      id: resumeId,
+      userId,
+    },
+    include: {
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        take: 12,
+      },
+      sources: {
+        orderBy: { createdAt: "desc" },
+      },
+      derivedResumes: {
+        orderBy: { updatedAt: "desc" },
+        take: 6,
+        include: {
+          versions: {
+            orderBy: { versionNumber: "desc" },
+            take: 1,
+          },
+        },
+      },
+      analyses: {
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        include: {
+          jobTarget: true,
+        },
+      },
+      suggestionSets: {
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        include: {
+          jobTarget: true,
+        },
+      },
+      outputRenders: {
+        orderBy: { createdAt: "desc" },
+        take: 24,
+        include: {
+          resumeVersion: {
+            select: {
+              id: true,
+              versionNumber: true,
+            },
+          },
+        },
+      },
+      _count: {
+        select: {
+          versions: true,
+          analyses: true,
+          suggestionSets: true,
+          derivedResumes: true,
+        },
+      },
+    },
+  });
+}
+
+export async function getResumeVersionReviewForUser(
+  userId: string,
+  resumeId: string,
+  versionId: string
+) {
+  const version = await prisma.resumeVersion.findFirst({
+    where: {
+      id: versionId,
+      resumeId,
+      resume: {
+        userId,
+      },
+    },
+    include: {
+      resume: {
+        select: {
+          id: true,
+          title: true,
+          kind: true,
+          status: true,
+          summary: true,
+        },
+      },
+    },
+  });
+
+  if (!version) {
+    return null;
+  }
+
+  const previousVersion =
+    version.versionNumber > 1
+      ? await prisma.resumeVersion.findFirst({
+          where: {
+            resumeId,
+            versionNumber: version.versionNumber - 1,
+          },
+        })
+      : null;
+
+  const provenance = getEditorStateLinks(version.editorState);
+
+  const linkedAnalysis =
+    (provenance.analysisId
+      ? await prisma.resumeAnalysis.findFirst({
+          where: {
+            id: provenance.analysisId,
+            resumeId,
+          },
+          include: {
+            jobTarget: true,
+          },
+        })
+      : null) ??
+    (provenance.jobTargetId
+      ? await prisma.resumeAnalysis.findFirst({
+          where: {
+            resumeId,
+            jobTargetId: provenance.jobTargetId,
+          },
+          orderBy: { createdAt: "desc" },
+          include: {
+            jobTarget: true,
+          },
+        })
+      : null);
+
+  const linkedSuggestionSet =
+    (provenance.suggestionSetId
+      ? await prisma.suggestionSet.findFirst({
+          where: {
+            id: provenance.suggestionSetId,
+            resumeId,
+          },
+          include: {
+            jobTarget: true,
+          },
+        })
+      : null) ??
+    (provenance.jobTargetId
+      ? await prisma.suggestionSet.findFirst({
+          where: {
+            resumeId,
+            jobTargetId: provenance.jobTargetId,
+          },
+          orderBy: { createdAt: "desc" },
+          include: {
+            jobTarget: true,
+          },
+        })
+      : null);
+
+  const siblingVersions = await prisma.resumeVersion.findMany({
+    where: {
+      resumeId,
+    },
+    orderBy: { versionNumber: "desc" },
+    select: {
+      id: true,
+      versionNumber: true,
+      createdAt: true,
+      notes: true,
+      editorState: true,
+    },
+  });
+
+  const reviewOutputs = siblingVersions
+    .filter((candidate) => getEditorStateLinks(candidate.editorState).reviewVersionId === version.id)
+    .map((candidate) => ({
+      id: candidate.id,
+      versionNumber: candidate.versionNumber,
+      createdAt: candidate.createdAt,
+      notes: candidate.notes,
+    }));
+
+  return {
+    version,
+    previousVersion,
+    linkedAnalysis,
+    linkedSuggestionSet,
+    provenance,
+    reviewOutputs,
+  };
+}
+
+export async function persistTailoringArtifacts(params: {
+  user: AuthenticatedUser;
+  resumeId: string;
+  jobTarget: JobTargetInput;
+  analysis: ResumeAnalysisResult;
+  curation?: CurationGuidance;
+}) {
+  const { user, resumeId, jobTarget, analysis, curation } = params;
+  await ensureUserRecord(user);
+
+  const resume = await prisma.resume.findFirst({
+    where: {
+      id: resumeId,
+      userId: user.id,
+    },
+    include: {
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        take: 1,
+      },
+    },
+  });
+
+  if (!resume || resume.versions.length === 0) {
+    throw new Error("Curriculo nao encontrado para adaptacao.");
+  }
+
+  const latestVersion = resume.versions[0];
+
+  return prisma.$transaction(async (tx) => {
+    const createdJobTarget = await tx.jobTarget.create({
+      data: {
+        userId: user.id,
+        title: jobTarget.title,
+        company: jobTarget.company,
+        description: jobTarget.description,
+        parsedKeywords: {
+          matchedKeywords: analysis.matchedKeywords,
+          missingKeywords: analysis.missingKeywords,
+          preferredKeywords: curation?.preferredKeywords ?? [],
+          focusAreas: curation?.focusAreas ?? [],
+        },
+      },
+    });
+
+    const createdAnalysis = await tx.resumeAnalysis.create({
+      data: {
+        resumeId: resume.id,
+        resumeVersionId: latestVersion.id,
+        jobTargetId: createdJobTarget.id,
+        atsScore: analysis.atsScore,
+        fitScore: analysis.fitScore,
+        strengths: analysis.strengths as unknown as Prisma.InputJsonValue,
+        gaps: analysis.gaps as unknown as Prisma.InputJsonValue,
+        recommendations: analysis.recommendations as unknown as Prisma.InputJsonValue,
+        modelName: "heuristic-v1",
+      },
+    });
+
+    const createdSuggestionSet = await tx.suggestionSet.create({
+      data: {
+        resumeId: resume.id,
+        resumeVersionId: latestVersion.id,
+        jobTargetId: createdJobTarget.id,
+        status: SuggestionStatus.GENERATED,
+        items: analysis.recommendations.map((recommendation) => ({
+          type: "recommendation",
+          text: recommendation,
+        })) as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    if (resume.kind === ResumeKind.JOB_TAILORED) {
+      await tx.resume.update({
+        where: { id: resume.id },
+        data: {
+          jobTargetId: createdJobTarget.id,
+        },
+      });
+    }
+
+    return {
+      jobTarget: createdJobTarget,
+      analysis: createdAnalysis,
+      suggestionSet: createdSuggestionSet,
+    };
+  });
+}
+
 export async function createResumeVersion(params: {
+  user: AuthenticatedUser;
   resumeId: string;
   normalizedData: Prisma.InputJsonValue;
   notes?: string;
   editorState?: Prisma.InputJsonValue;
 }) {
-  const { resumeId, normalizedData, notes, editorState } = params;
+  const { user, resumeId, normalizedData, notes, editorState } = params;
+  await ensureUserRecord(user);
+
+  const resume = await prisma.resume.findFirst({
+    where: {
+      id: resumeId,
+      userId: user.id,
+    },
+    select: { id: true },
+  });
+
+  if (!resume) {
+    throw new Error("Curriculo nao encontrado para criar nova versao.");
+  }
 
   const latestVersion = await prisma.resumeVersion.findFirst({
     where: { resumeId },
@@ -187,6 +501,54 @@ export async function createResumeVersion(params: {
       normalizedData,
       notes,
       editorState,
+    },
+  });
+}
+
+export async function createOutputRender(params: {
+  user: AuthenticatedUser;
+  resumeId: string;
+  resumeVersionId: string;
+  kind: OutputKind;
+  content: Prisma.InputJsonValue;
+  html: string;
+}) {
+  const { user, resumeId, resumeVersionId, kind, content, html } = params;
+  await ensureUserRecord(user);
+
+  const version = await prisma.resumeVersion.findFirst({
+    where: {
+      id: resumeVersionId,
+      resumeId,
+      resume: {
+        userId: user.id,
+      },
+    },
+    select: {
+      id: true,
+      versionNumber: true,
+    },
+  });
+
+  if (!version) {
+    throw new Error("Versao do curriculo nao encontrada para gerar saida.");
+  }
+
+  return prisma.outputRender.create({
+    data: {
+      resumeId,
+      resumeVersionId: version.id,
+      kind,
+      content,
+      html,
+    },
+    include: {
+      resumeVersion: {
+        select: {
+          id: true,
+          versionNumber: true,
+        },
+      },
     },
   });
 }
@@ -250,4 +612,35 @@ export async function createDerivedResumeVariant(params: {
       },
     },
   });
+}
+
+function getEditorStateLinks(editorState: Prisma.JsonValue | null) {
+  if (!editorState || typeof editorState !== "object" || Array.isArray(editorState)) {
+    return {
+      source: null,
+      jobTitle: null,
+      company: null,
+      analysisId: null,
+      jobTargetId: null,
+      suggestionSetId: null,
+      reviewVersionId: null,
+    };
+  }
+
+  const value = editorState as Prisma.JsonObject;
+
+  return {
+    source: getEditorStateString(value, "source"),
+    jobTitle: getEditorStateString(value, "jobTitle"),
+    company: getEditorStateString(value, "company"),
+    analysisId: getEditorStateString(value, "analysisId"),
+    jobTargetId: getEditorStateString(value, "jobTargetId"),
+    suggestionSetId: getEditorStateString(value, "suggestionSetId"),
+    reviewVersionId: getEditorStateString(value, "reviewVersionId"),
+  };
+}
+
+function getEditorStateString(value: Prisma.JsonObject, key: string) {
+  const candidate = value[key];
+  return typeof candidate === "string" && candidate.trim() ? candidate : null;
 }
