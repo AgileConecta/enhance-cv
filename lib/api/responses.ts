@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 export type ApiErrorCode =
   | "UNAUTHORIZED"
+  | "NOT_FOUND"
   | "VALIDATION_ERROR"
   | "IMPORT_ERROR"
   | "INTERNAL_ERROR";

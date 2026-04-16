@@ -4,8 +4,51 @@ import { apiError, apiSuccess } from "@/lib/api/responses";
 import { AuthenticationError, requireAuthenticatedUser } from "@/lib/auth/current-user";
 import { logError, logInfo } from "@/lib/observability/logger";
 import { getRequestId } from "@/lib/observability/request-id";
-import { createManualResume } from "@/lib/resume/storage";
+import { createManualResume, listResumesForUser } from "@/lib/resume/storage";
 import { JsonResumeSchema } from "@/lib/schemas/json-resume.schema";
+
+export async function GET(request: NextRequest) {
+  const requestId = getRequestId(request);
+
+  try {
+    const user = await requireAuthenticatedUser();
+    const resumes = await listResumesForUser(user.id);
+
+    logInfo("resume library fetched", {
+      requestId,
+      route: "/api/resumes",
+      userId: user.id,
+      status: 200,
+    });
+
+    return apiSuccess(requestId, {
+      resumes: resumes.map((resume) => ({
+        id: resume.id,
+        title: resume.title,
+        kind: resume.kind,
+        status: resume.status,
+        summary: resume.summary,
+        updatedAt: resume.updatedAt,
+        sourceResumeId: resume.sourceResumeId,
+        jobTargetId: resume.jobTargetId,
+        currentVersion: resume.versions[0]?.versionNumber ?? 1,
+        counts: resume._count,
+      })),
+    });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return apiError(requestId, 401, "UNAUTHORIZED", error.message);
+    }
+
+    logError("resume library fetch failed", {
+      requestId,
+      route: "/api/resumes",
+      status: 500,
+      error,
+    });
+    return apiError(requestId, 500, "INTERNAL_ERROR", "Erro interno ao listar curriculos.");
+  }
+}
 
 export async function POST(request: NextRequest) {
   const requestId = getRequestId(request);

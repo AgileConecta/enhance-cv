@@ -13,7 +13,7 @@ export type AuthenticatedUser = {
   name?: string;
 };
 
-export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {
+export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -21,7 +21,7 @@ export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {
   } = await supabase.auth.getUser();
 
   if (error || !user) {
-    throw new AuthenticationError();
+    return null;
   }
 
   const email = user.email?.trim();
@@ -37,4 +37,14 @@ export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {
     email,
     name,
   };
+}
+
+export async function requireAuthenticatedUser(): Promise<AuthenticatedUser> {
+  const user = await getAuthenticatedUser();
+
+  if (!user) {
+    throw new AuthenticationError();
+  }
+
+  return user;
 }
