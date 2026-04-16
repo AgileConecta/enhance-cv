@@ -163,3 +163,91 @@ export async function createManualResume(params: {
     },
   });
 }
+
+export async function createResumeVersion(params: {
+  resumeId: string;
+  normalizedData: Prisma.InputJsonValue;
+  notes?: string;
+  editorState?: Prisma.InputJsonValue;
+}) {
+  const { resumeId, normalizedData, notes, editorState } = params;
+
+  const latestVersion = await prisma.resumeVersion.findFirst({
+    where: { resumeId },
+    orderBy: { versionNumber: "desc" },
+    select: { versionNumber: true },
+  });
+
+  const nextVersionNumber = (latestVersion?.versionNumber ?? 0) + 1;
+
+  return prisma.resumeVersion.create({
+    data: {
+      resumeId,
+      versionNumber: nextVersionNumber,
+      normalizedData,
+      notes,
+      editorState,
+    },
+  });
+}
+
+export async function createDerivedResumeVariant(params: {
+  user: AuthenticatedUser;
+  sourceResumeId: string;
+  title: string;
+  kind: "TEMPLATE" | "JOB_TAILORED";
+  jobTargetId?: string;
+  summary?: string;
+  notes?: string;
+}) {
+  const { user, sourceResumeId, title, kind, jobTargetId, summary, notes } = params;
+  await ensureUserRecord(user);
+
+  const sourceResume = await prisma.resume.findFirst({
+    where: {
+      id: sourceResumeId,
+      userId: user.id,
+    },
+    include: {
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        take: 1,
+      },
+    },
+  });
+
+  if (!sourceResume || sourceResume.versions.length === 0) {
+    throw new Error("Curriculo de origem nao encontrado para derivacao.");
+  }
+
+  const latestVersion = sourceResume.versions[0];
+
+  return prisma.resume.create({
+    data: {
+      userId: user.id,
+      title,
+      kind,
+      status: sourceResume.status,
+      summary: summary ?? sourceResume.summary,
+      sourceResumeId,
+      jobTargetId,
+      versions: {
+        create: {
+          versionNumber: 1,
+          normalizedData: latestVersion.normalizedData as unknown as Prisma.InputJsonValue,
+          editorState: latestVersion.editorState as Prisma.InputJsonValue | undefined,
+          notes: notes ?? "Versao inicial derivada",
+        },
+      },
+      outputRenders: {
+        create: [{ kind: OutputKind.ATS }, { kind: OutputKind.VISUAL }],
+      },
+    },
+    include: {
+      versions: {
+        orderBy: { versionNumber: "desc" },
+        take: 1,
+      },
+    },
+  });
+}
